@@ -1,10 +1,18 @@
 <template>
 	<div class="root safe-area-inset">
 		<div class="container px-4">
-			<TopHeader :title="$t('config.main.title')" />
+			<TopHeader
+				ref="header"
+				:title="$t('config.main.title')"
+				:notifications="notifications"
+			/>
 			<div class="wrapper pb-5">
-				<WelcomeBanner v-if="loadpointsRequired" />
-				<ExperimentalBanner v-else-if="$hiddenFeatures()" />
+				<AuthSuccessBanner
+					v-if="callbackCompleted || callbackError"
+					:provider-id="callbackCompleted"
+					:error="callbackError"
+					:auth-providers="authProviders"
+				/>
 
 				<h2 class="my-4 mt-5">{{ $t("config.section.general") }}</h2>
 				<GeneralConfig
@@ -12,313 +20,290 @@
 					@site-changed="siteChanged"
 				/>
 
-				<div v-if="$hiddenFeatures()">
-					<h2 class="my-4">{{ $t("config.section.loadpoints") }} 🧪</h2>
-					<p
-						v-if="loadpointsRequired"
-						class="text-muted my-4"
-						data-testid="loadpoint-required"
+				<WelcomeBanner v-if="setupRequired" />
+				<h2 class="my-4">{{ $t("config.section.loadpoints") }}</h2>
+				<div class="p-0 config-list">
+					<DeviceCard
+						v-for="loadpoint in loadpoints"
+						:key="loadpoint.name"
+						:title="loadpoint.title"
+						:name="loadpoint.name"
+						:editable="!!loadpoint.id"
+						:error="hasDeviceError('loadpoint', loadpoint.name)"
+						data-testid="loadpoint"
+						@edit="editLoadpoint(loadpoint.id)"
 					>
-						{{ $t("config.main.loadpointRequired") }}
-					</p>
-					<div class="p-0 config-list">
-						<DeviceCard
-							v-for="loadpoint in loadpoints"
-							:key="loadpoint.name"
-							:title="loadpoint.title"
-							:name="loadpoint.name"
-							:editable="!!loadpoint.id"
-							:error="hasDeviceError('loadpoint', loadpoint.name)"
-							data-testid="loadpoint"
-							@edit="editLoadpoint(loadpoint.id)"
-						>
-							<template #tags>
-								<DeviceTags :tags="loadpointTags(loadpoint)" />
-							</template>
-							<template #icon>
-								<VehicleIcon
-									v-if="chargerIcon(loadpoint.charger)"
-									:name="chargerIcon(loadpoint.charger)"
-								/>
-								<LoadpointIcon v-else />
-							</template>
-						</DeviceCard>
+						<template #tags>
+							<DeviceTags :tags="loadpointTags(loadpoint)" />
+						</template>
+						<template #icon>
+							<VehicleIcon
+								v-if="chargerIcon(loadpoint.charger)"
+								:name="chargerIcon(loadpoint.charger)"
+							/>
+							<LoadpointIcon v-else />
+						</template>
+					</DeviceCard>
 
-						<NewDeviceButton
-							data-testid="add-loadpoint"
-							:title="$t('config.main.addLoadpoint')"
-							:attention="loadpointsRequired"
-							@click="newLoadpoint"
-						/>
-					</div>
+					<NewDeviceButton
+						data-testid="add-loadpoint"
+						:title="$t('config.main.addLoadpoint')"
+						@click="newLoadpoint"
+					/>
+				</div>
 
-					<h2 class="my-4">{{ $t("config.section.vehicles") }} 🧪</h2>
-					<div class="p-0 config-list">
-						<DeviceCard
-							v-for="vehicle in vehicles"
-							:key="vehicle.name"
-							:title="vehicle.config?.title || vehicle.name"
-							:name="vehicle.name"
-							:editable="vehicle.id >= 0"
-							:error="hasDeviceError('vehicle', vehicle.name)"
-							data-testid="vehicle"
-							@edit="editVehicle(vehicle.id)"
-						>
-							<template #icon>
-								<VehicleIcon :name="vehicle.config?.icon" />
-							</template>
-							<template #tags>
-								<DeviceTags :tags="deviceTags('vehicle', vehicle.name)" />
-							</template>
-						</DeviceCard>
-						<NewDeviceButton
-							data-testid="add-vehicle"
-							:title="$t('config.main.addVehicle')"
-							@click="newVehicle"
-						/>
-					</div>
+				<h2 class="my-4">{{ $t("config.section.vehicles") }}</h2>
+				<div class="p-0 config-list">
+					<DeviceCard
+						v-for="vehicle in vehicles"
+						:key="vehicle.name"
+						:title="vehicle.config?.title || vehicle.name"
+						:name="vehicle.name"
+						:editable="vehicle.id >= 0"
+						:error="hasDeviceError('vehicle', vehicle.name)"
+						data-testid="vehicle"
+						@edit="editVehicle(vehicle.id)"
+					>
+						<template #icon>
+							<VehicleIcon :name="vehicle.config?.icon" />
+						</template>
+						<template #tags>
+							<DeviceTags :tags="deviceTags('vehicle', vehicle.name)" />
+						</template>
+					</DeviceCard>
+					<NewDeviceButton
+						data-testid="add-vehicle"
+						:title="$t('config.main.addVehicle')"
+						@click="newVehicle"
+					/>
+				</div>
 
-					<h2 class="my-4 mt-5">{{ $t("config.section.grid") }} 🧪</h2>
-					<div class="p-0 config-list">
-						<DeviceCard
-							v-if="gridMeter"
-							:title="$t('config.grid.title')"
-							:name="gridMeter.name"
-							:editable="!!gridMeter.id"
-							:error="hasDeviceError('meter', gridMeter.name)"
-							data-testid="grid"
-							@edit="editMeter('grid', gridMeter.id)"
-						>
-							<template #icon>
-								<shopicon-regular-powersupply></shopicon-regular-powersupply>
-							</template>
-							<template #tags>
-								<DeviceTags :tags="deviceTags('meter', gridMeter.name)" />
-							</template>
-						</DeviceCard>
-						<NewDeviceButton
-							v-else
-							:title="$t('config.main.addGrid')"
-							data-testid="add-grid"
-							@click="newMeter('grid')"
-						/>
-						<DeviceCard
-							v-if="tariffTags"
-							:title="$t('config.tariffs.title')"
-							editable
-							:error="hasClassError('tariff')"
-							data-testid="tariffs"
-							@edit="openModal('tariffsModal')"
-						>
-							<template #icon>
-								<shopicon-regular-receivepayment></shopicon-regular-receivepayment>
-							</template>
-							<template #tags>
-								<DeviceTags :tags="tariffTags" />
-							</template>
-						</DeviceCard>
-						<NewDeviceButton
-							v-else
-							:title="$t('config.main.addTariffs')"
-							data-testid="add-tariffs"
-							@click="openModal('tariffsModal')"
-						/>
-					</div>
-					<h2 class="my-4 mt-5">{{ $t("config.section.meter") }} 🧪</h2>
-					<div class="p-0 config-list">
-						<DeviceCard
-							v-for="meter in pvMeters"
-							:key="meter.name"
-							:title="
-								meter.deviceTitle ||
-								meter.config?.template ||
-								$t('config.devices.solarSystem')
-							"
-							:name="meter.name"
-							:editable="!!meter.id"
-							:error="hasDeviceError('meter', meter.name)"
-							data-testid="pv"
-							@edit="editMeter('pv', meter.id)"
-						>
-							<template #icon>
-								<shopicon-regular-sun></shopicon-regular-sun>
-							</template>
-							<template #tags>
-								<DeviceTags :tags="deviceTags('meter', meter.name)" />
-							</template>
-						</DeviceCard>
-						<DeviceCard
-							v-for="meter in batteryMeters"
-							:key="meter.name"
-							:title="
-								meter.deviceTitle ||
-								meter.config?.template ||
-								$t('config.devices.batteryStorage')
-							"
-							:name="meter.name"
-							:editable="!!meter.id"
-							:error="hasDeviceError('meter', meter.name)"
-							data-testid="battery"
-							@edit="editMeter('battery', meter.id)"
-						>
-							<template #icon>
-								<shopicon-regular-batterythreequarters></shopicon-regular-batterythreequarters>
-							</template>
-							<template #tags>
-								<DeviceTags :tags="deviceTags('meter', meter.name)" />
-							</template>
-						</DeviceCard>
-						<NewDeviceButton
-							:title="$t('config.main.addPvBattery')"
-							@click="addSolarBatteryMeter"
-						/>
-					</div>
+				<h2 class="my-4 mt-5">{{ $t("config.section.grid") }}</h2>
+				<div class="p-0 config-list">
+					<MeterCard
+						v-if="gridMeter"
+						:meter="gridMeter"
+						:title="$t('config.grid.title')"
+						meter-type="grid"
+						:has-error="hasDeviceError('meter', gridMeter.name)"
+						:tags="deviceTags('meter', gridMeter.name)"
+						@edit="editMeter"
+					/>
+					<NewDeviceButton
+						v-else
+						:title="$t('config.main.addGrid')"
+						data-testid="add-grid"
+						@click="newMeter('grid')"
+					/>
+					<DeviceCard
+						:title="$t('config.tariffs.title')"
+						editable
+						:unconfigured="isUnconfigured(tariffTags)"
+						:error="hasClassError('tariff')"
+						data-testid="tariffs"
+						@edit="openModal('tariffsModal')"
+					>
+						<template #icon>
+							<shopicon-regular-receivepayment></shopicon-regular-receivepayment>
+						</template>
+						<template #tags>
+							<DeviceTags :tags="tariffTags" />
+						</template>
+					</DeviceCard>
+				</div>
+				<h2 class="my-4 mt-5">{{ $t("config.section.meter") }}</h2>
+				<div class="p-0 config-list">
+					<MeterCard
+						v-for="meter in pvMeters"
+						:key="meter.name"
+						:meter="meter"
+						meter-type="pv"
+						:has-error="hasDeviceError('meter', meter.name)"
+						:tags="deviceTags('meter', meter.name)"
+						@edit="editMeter"
+					/>
+					<MeterCard
+						v-for="meter in batteryMeters"
+						:key="meter.name"
+						:meter="meter"
+						meter-type="battery"
+						:has-error="hasDeviceError('meter', meter.name)"
+						:tags="deviceTags('meter', meter.name)"
+						@edit="editMeter"
+					/>
+					<NewDeviceButton
+						:title="$t('config.main.addPvBattery')"
+						@click="addSolarBatteryMeter"
+					/>
+				</div>
 
-					<h2 class="my-4 mt-5">{{ $t("config.section.additionalMeter") }} 🧪</h2>
-					<div class="p-0 config-list">
-						<DeviceCard
-							v-for="meter in auxMeters"
-							:key="meter.name"
-							:title="
-								meter.deviceTitle ||
-								meter.config?.template ||
-								$t('config.devices.auxMeter')
-							"
-							:name="meter.name"
-							:editable="!!meter.id"
-							:error="hasDeviceError('meter', meter.name)"
-							data-testid="aux"
-							@edit="editMeter('aux', meter.id)"
-						>
-							<template #icon>
-								<VehicleIcon :name="meter.deviceIcon || 'smartconsumer'" />
-							</template>
-							<template #tags>
-								<DeviceTags :tags="deviceTags('meter', meter.name)" />
-							</template>
-						</DeviceCard>
-						<NewDeviceButton
-							:title="$t('config.main.addAdditional')"
-							@click="newAdditionalMeter"
-						/>
-					</div>
+				<h2 class="my-4 mt-5">{{ $t("config.section.additionalMeter") }}</h2>
+				<div class="p-0 config-list">
+					<MeterCard
+						v-for="meter in auxMeters"
+						:key="meter.name"
+						:meter="meter"
+						meter-type="aux"
+						:has-error="hasDeviceError('meter', meter.name)"
+						:tags="deviceTags('meter', meter.name)"
+						@edit="editMeter"
+					/>
+					<MeterCard
+						v-for="meter in extMeters"
+						:key="meter.name"
+						:meter="meter"
+						meter-type="ext"
+						:has-error="hasDeviceError('meter', meter.name)"
+						:tags="deviceTags('meter', meter.name)"
+						@edit="editMeter"
+					/>
+					<NewDeviceButton
+						:title="$t('config.main.addAdditional')"
+						@click="newAdditionalMeter"
+					/>
+				</div>
 
-					<h2 class="my-4 mt-5">{{ $t("config.section.integrations") }} 🧪</h2>
+				<h2 class="my-4 mt-5">{{ $t("config.section.integrations") }}</h2>
 
-					<div class="p-0 config-list">
-						<DeviceCard
-							:title="$t('config.mqtt.title')"
-							editable
-							:error="hasClassError('mqtt')"
-							data-testid="mqtt"
-							@edit="openModal('mqttModal')"
-						>
-							<template #icon><MqttIcon /></template>
-							<template #tags>
-								<DeviceTags :tags="mqttTags" />
-							</template>
-						</DeviceCard>
-						<DeviceCard
-							:title="$t('config.messaging.title')"
-							editable
-							:error="hasClassError('messenger')"
-							data-testid="messaging"
-							@edit="openModal('messagingModal')"
-						>
-							<template #icon><NotificationIcon /></template>
-							<template #tags>
-								<DeviceTags :tags="messagingTags" />
-							</template>
-						</DeviceCard>
-						<DeviceCard
-							:title="$t('config.influx.title')"
-							editable
-							:error="hasClassError('influx')"
-							data-testid="influx"
-							@edit="openModal('influxModal')"
-						>
-							<template #icon><InfluxIcon /></template>
-							<template #tags>
-								<DeviceTags :tags="influxTags" />
-							</template>
-						</DeviceCard>
-						<DeviceCard
-							:title="`${$t('config.eebus.title')} 🧪`"
-							editable
-							:error="hasClassError('eebus')"
-							data-testid="eebus"
-							@edit="openModal('eebusModal')"
-						>
-							<template #icon><EebusIcon /></template>
-							<template #tags>
-								<DeviceTags :tags="eebusTags" />
-							</template>
-						</DeviceCard>
+				<div class="p-0 config-list">
+					<AuthProvidersCard
+						:providers="authProviders"
+						data-testid="auth-providers"
+						@auth-request="handleProviderAuthRequest"
+					/>
+					<DeviceCard
+						:title="$t('config.mqtt.title')"
+						editable
+						:error="hasClassError('mqtt')"
+						:unconfigured="isUnconfigured(mqttTags)"
+						data-testid="mqtt"
+						@edit="openModal('mqttModal')"
+					>
+						<template #icon><MqttIcon /></template>
+						<template #tags>
+							<DeviceTags :tags="mqttTags" />
+						</template>
+					</DeviceCard>
+					<DeviceCard
+						:title="$t('config.messaging.title')"
+						editable
+						:error="hasClassError('messenger')"
+						:unconfigured="isUnconfigured(messagingTags)"
+						data-testid="messaging"
+						@edit="openModal('messagingModal')"
+					>
+						<template #icon><NotificationIcon /></template>
+						<template #tags>
+							<DeviceTags :tags="messagingTags" />
+						</template>
+					</DeviceCard>
+					<DeviceCard
+						:title="$t('config.influx.title')"
+						editable
+						:error="hasClassError('influx')"
+						:unconfigured="isUnconfigured(influxTags)"
+						data-testid="influx"
+						@edit="openModal('influxModal')"
+					>
+						<template #icon><InfluxIcon /></template>
+						<template #tags>
+							<DeviceTags :tags="influxTags" />
+						</template>
+					</DeviceCard>
+					<DeviceCard
+						:title="$t('config.eebus.title')"
+						editable
+						:error="hasClassError('eebus')"
+						:unconfigured="isUnconfigured(eebusTags)"
+						data-testid="eebus"
+						@edit="openModal('eebusModal')"
+					>
+						<template #icon><EebusIcon /></template>
+						<template #tags>
+							<DeviceTags :tags="eebusTags" />
+						</template>
+					</DeviceCard>
+					<DeviceCard
+						:title="$t('config.ocpp.title')"
+						editable
+						:error="hasClassError('ocpp')"
+						:unconfigured="isUnconfigured(ocppTags)"
+						data-testid="ocpp"
+						@edit="openModal('ocppModal')"
+					>
+						<template #icon><OcppIcon /></template>
+						<template #tags>
+							<DeviceTags :tags="ocppTags" />
+						</template>
+					</DeviceCard>
 
-						<DeviceCard
-							:title="`${$t('config.circuits.title')} 🧪`"
-							editable
-							:error="hasClassError('circuit')"
-							data-testid="circuits"
-							@edit="openModal('circuitsModal')"
-						>
-							<template #icon><CircuitsIcon /></template>
-							<template #tags>
-								<DeviceTags
-									v-if="circuitsSorted.length == 0"
-									:tags="{ configured: { value: false } }"
-								/>
-								<template
-									v-for="(circuit, idx) in circuitsSorted"
-									v-else
-									:key="circuit.name"
-								>
-									<hr v-if="idx > 0" />
-									<p class="my-2 fw-bold">
-										{{ circuit.config?.title }}
-										<code>({{ circuit.name }})</code>
-									</p>
-									<DeviceTags :tags="circuitTags(circuit)" />
-								</template>
+					<DeviceCard
+						:title="`${$t('config.circuits.title')}`"
+						editable
+						:error="hasClassError('circuit')"
+						:unconfigured="circuitsSorted.length === 0"
+						data-testid="circuits"
+						@edit="openModal('circuitsModal')"
+					>
+						<template #icon><CircuitsIcon /></template>
+						<template #tags>
+							<DeviceTags
+								v-if="circuitsSorted.length == 0"
+								:tags="{ configured: { value: false } }"
+							/>
+							<template
+								v-for="(circuit, idx) in circuitsSorted"
+								v-else
+								:key="circuit.name"
+							>
+								<hr v-if="idx > 0" />
+								<p class="my-2 fw-bold">
+									{{ circuit.config?.title }}
+									<code>({{ circuit.name }})</code>
+								</p>
+								<DeviceTags :tags="circuitTags(circuit)" />
 							</template>
-						</DeviceCard>
-						<DeviceCard
-							:title="$t('config.modbusproxy.title')"
-							editable
-							:error="hasClassError('modbusproxy')"
-							data-testid="modbusproxy"
-							@edit="openModal('modbusProxyModal')"
-						>
-							<template #icon><ModbusProxyIcon /></template>
-							<template #tags>
-								<DeviceTags :tags="modbusproxyTags" />
-							</template>
-						</DeviceCard>
-						<DeviceCard
-							:title="$t('config.shm.cardTitle')"
-							editable
-							:error="hasClassError('shm')"
-							data-testid="shm"
-							@edit="openModal('shmModal')"
-						>
-							<template #icon><ShmIcon /></template>
-							<template #tags>
-								<DeviceTags :tags="shmTags" />
-							</template>
-						</DeviceCard>
-						<DeviceCard
-							:title="$t('config.hems.title')"
-							editable
-							:error="hasClassError('hems')"
-							data-testid="hems"
-							@edit="openModal('hemsModal')"
-						>
-							<template #icon><HemsIcon /></template>
-							<template #tags>
-								<DeviceTags :tags="hemsTags" />
-							</template>
-						</DeviceCard>
-					</div>
+						</template>
+					</DeviceCard>
+					<DeviceCard
+						:title="$t('config.modbusproxy.title')"
+						editable
+						:error="hasClassError('modbusproxy')"
+						:unconfigured="isUnconfigured(modbusproxyTags)"
+						data-testid="modbusproxy"
+						@edit="openModal('modbusProxyModal')"
+					>
+						<template #icon><ModbusProxyIcon /></template>
+						<template #tags>
+							<DeviceTags :tags="modbusproxyTags" />
+						</template>
+					</DeviceCard>
+					<DeviceCard
+						:title="$t('config.shm.cardTitle')"
+						editable
+						:error="hasClassError('shm')"
+						:unconfigured="isUnconfigured(shmTags)"
+						data-testid="shm"
+						@edit="openModal('shmModal')"
+					>
+						<template #icon><ShmIcon /></template>
+						<template #tags>
+							<DeviceTags :tags="shmTags" />
+						</template>
+					</DeviceCard>
+					<DeviceCard
+						:title="$t('config.hems.title')"
+						editable
+						:error="hasClassError('hems')"
+						:unconfigured="isUnconfigured(hemsTags)"
+						data-testid="hems"
+						@edit="openModal('hemsModal')"
+					>
+						<template #icon><HemsIcon /></template>
+						<template #tags>
+							<DeviceTags :tags="hemsTags" />
+						</template>
+					</DeviceCard>
 				</div>
 
 				<hr class="my-5" />
@@ -332,6 +317,7 @@
 						{{ $t("help.issueButton") }}
 					</router-link>
 					<button
+						data-testid="backup-restore"
 						class="btn btn-outline-secondary text-truncate"
 						@click="openModal('backupRestoreModal')"
 					>
@@ -351,20 +337,24 @@
 					:chargerValues="deviceValues['charger']"
 					:meters="meters"
 					:circuits="circuits"
-					:fade="loadpointSubModalOpen ? 'left' : ''"
+					:fade="loadpointSubModalOpen ? 'left' : undefined"
 					:hasDeviceError="hasDeviceError"
 					@updated="loadpointChanged"
 					@open-charger-modal="editLoadpointCharger"
 					@open-meter-modal="editLoadpointMeter"
 					@opened="loadpointSubModalOpen = false"
 				/>
-				<VehicleModal :id="selectedVehicleId" @vehicle-changed="vehicleChanged" />
+				<VehicleModal
+					:id="selectedVehicleId"
+					:is-sponsor="isSponsor"
+					@vehicle-changed="vehicleChanged"
+				/>
 				<MeterModal
 					:id="selectedMeterId"
-					:name="selectedMeterName"
 					:type="selectedMeterType"
 					:typeChoices="selectedMeterTypeChoices"
-					:fade="loadpointSubModalOpen ? 'right' : ''"
+					:fade="loadpointSubModalOpen ? 'right' : undefined"
+					:is-sponsor="isSponsor"
 					@added="meterAdded"
 					@updated="meterChanged"
 					@removed="meterRemoved"
@@ -372,10 +362,10 @@
 				/>
 				<ChargerModal
 					:id="selectedChargerId"
-					:name="selectedChargerName"
 					:loadpointType="selectedLoadpointType"
-					:fade="loadpointSubModalOpen ? 'right' : ''"
-					:isSponsor="isSponsor"
+					:fade="loadpointSubModalOpen ? 'right' : undefined"
+					:is-sponsor="isSponsor"
+					:ocpp="ocpp"
 					@added="chargerAdded"
 					@updated="chargerChanged"
 					@removed="chargerRemoved"
@@ -385,21 +375,23 @@
 				<MqttModal @changed="loadDirty" />
 				<NetworkModal @changed="loadDirty" />
 				<ControlModal @changed="loadDirty" />
-				<SponsorModal :error="hasClassError('sponsorship')" @changed="loadDirty" />
-				<HemsModal @changed="yamlChanged" />
+				<HemsModal :fromYaml="hems?.fromYaml" @changed="yamlChanged" />
 				<ShmModal @changed="loadDirty" />
 				<MessagingModal @changed="yamlChanged" />
 				<TariffsModal @changed="yamlChanged" />
 				<TelemetryModal :sponsor="sponsor" :telemetry="telemetry" />
-				<ModbusProxyModal @changed="yamlChanged" />
+				<ExperimentalModal />
+				<ModbusProxyModal :is-sponsor="isSponsor" @changed="loadDirty" />
 				<CircuitsModal
 					:gridMeter="gridMeter"
 					:extMeters="extMeters"
 					@changed="yamlChanged"
 				/>
 				<EebusModal @changed="yamlChanged" />
+				<OcppModal :ocpp="ocpp" />
 				<BackupRestoreModal v-bind="backupRestoreProps" />
 				<PasswordModal update-mode />
+				<SponsorModal :error="hasClassError('sponsorship')" @changed="loadDirty" />
 			</div>
 		</div>
 	</div>
@@ -421,6 +413,8 @@ import DeviceCard from "../components/Config/DeviceCard.vue";
 import DeviceTags from "../components/Config/DeviceTags.vue";
 import EebusIcon from "../components/MaterialIcon/Eebus.vue";
 import EebusModal from "../components/Config/EebusModal.vue";
+import OcppIcon from "../components/MaterialIcon/Ocpp.vue";
+import OcppModal from "../components/Config/OcppModal.vue";
 import formatter from "../mixins/formatter";
 import GeneralConfig from "../components/Config/GeneralConfig.vue";
 import HemsIcon from "../components/MaterialIcon/Hems.vue";
@@ -433,6 +427,7 @@ import LoadpointModal from "../components/Config/LoadpointModal.vue";
 import LoadpointIcon from "../components/MaterialIcon/Loadpoint.vue";
 import MessagingModal from "../components/Config/MessagingModal.vue";
 import MeterModal from "../components/Config/MeterModal.vue";
+import MeterCard from "../components/Config/MeterCard.vue";
 import Modal from "bootstrap/js/dist/modal";
 import ModbusProxyIcon from "../components/MaterialIcon/ModbusProxy.vue";
 import ModbusProxyModal from "../components/Config/ModbusProxyModal.vue";
@@ -445,10 +440,11 @@ import SponsorModal from "../components/Config/SponsorModal.vue";
 import store from "../store";
 import TariffsModal from "../components/Config/TariffsModal.vue";
 import TelemetryModal from "../components/Config/TelemetryModal.vue";
+import ExperimentalModal from "../components/Config/ExperimentalModal.vue";
 import Header from "../components/Top/Header.vue";
 import VehicleIcon from "../components/VehicleIcon";
 import VehicleModal from "../components/Config/VehicleModal.vue";
-import { defineComponent } from "vue";
+import { defineComponent, type PropType } from "vue";
 import type {
 	Circuit,
 	ConfigCharger,
@@ -458,16 +454,25 @@ import type {
 	ConfigMeter,
 	LoadpointType,
 	Timeout,
-	SelectedMeterType,
+	VehicleOption,
+	MeterType,
 	SiteConfig,
 	DeviceType,
+	Notification,
 } from "@/types/evcc";
 
 type DeviceValuesMap = Record<DeviceType, Record<string, any>>;
+
+type DeviceTags = Record<
+	string,
+	{ value?: any; error?: boolean; warning?: boolean; muted?: boolean; options?: any }
+>;
+
 import BackupRestoreModal from "@/components/Config/BackupRestoreModal.vue";
 import WelcomeBanner from "../components/Config/WelcomeBanner.vue";
-import ExperimentalBanner from "../components/Config/ExperimentalBanner.vue";
+import AuthSuccessBanner from "../components/Config/AuthSuccessBanner.vue";
 import PasswordModal from "../components/Auth/PasswordModal.vue";
+import AuthProvidersCard from "../components/Config/AuthProvidersCard.vue";
 
 export default defineComponent({
 	name: "Config",
@@ -482,7 +487,8 @@ export default defineComponent({
 		DeviceTags,
 		EebusIcon,
 		EebusModal,
-		ExperimentalBanner,
+		OcppIcon,
+		OcppModal,
 		GeneralConfig,
 		HemsIcon,
 		HemsModal,
@@ -492,6 +498,7 @@ export default defineComponent({
 		InfluxModal,
 		MessagingModal,
 		MeterModal,
+		MeterCard,
 		LoadpointModal,
 		LoadpointIcon,
 		ModbusProxyIcon,
@@ -503,16 +510,19 @@ export default defineComponent({
 		SponsorModal,
 		TariffsModal,
 		TelemetryModal,
+		ExperimentalModal,
 		TopHeader: Header,
 		VehicleIcon,
 		VehicleModal,
 		WelcomeBanner,
+		AuthSuccessBanner,
 		PasswordModal,
+		AuthProvidersCard,
 	},
 	mixins: [formatter, collector],
 	props: {
 		offline: Boolean,
-		notifications: Array,
+		notifications: { type: Array as PropType<Notification[]>, default: () => [] },
 	},
 	data() {
 		return {
@@ -523,8 +533,8 @@ export default defineComponent({
 			circuits: [] as ConfigCircuit[],
 			selectedVehicleId: undefined as number | undefined,
 			selectedMeterId: undefined as number | undefined,
-			selectedMeterType: undefined as SelectedMeterType | undefined,
-			selectedMeterTypeChoices: [] as string[],
+			selectedMeterType: undefined as MeterType | undefined,
+			selectedMeterTypeChoices: [] as MeterType[],
 			selectedChargerId: undefined as number | undefined,
 			selectedLoadpointId: undefined as number | undefined,
 			selectedLoadpointType: undefined as LoadpointType | undefined,
@@ -552,8 +562,17 @@ export default defineComponent({
 		return { title: this.$t("config.main.title") };
 	},
 	computed: {
-		loadpointsRequired() {
-			return this.loadpoints.length === 0;
+		callbackCompleted() {
+			return this.$route.query["callbackCompleted"] as string | undefined;
+		},
+		callbackError() {
+			return this.$route.query["callbackError"] as string | undefined;
+		},
+		authProviders() {
+			return store.state?.authProviders;
+		},
+		setupRequired() {
+			return store.state?.setupRequired;
 		},
 		siteTitle() {
 			return this.site?.title;
@@ -584,7 +603,7 @@ export default defineComponent({
 		selectedChargerName() {
 			return this.getChargerById(this.selectedChargerId)?.name;
 		},
-		tariffTags() {
+		tariffTags(): DeviceTags {
 			const { currency, tariffGrid, tariffFeedIn, tariffCo2, tariffSolar } = store.state;
 			if (
 				tariffGrid === undefined &&
@@ -592,7 +611,7 @@ export default defineComponent({
 				tariffCo2 === undefined &&
 				tariffSolar === undefined
 			) {
-				return null;
+				return { configured: { value: false } };
 			}
 			const tags = {
 				currency: {},
@@ -618,7 +637,7 @@ export default defineComponent({
 			}
 			return tags;
 		},
-		mqttTags() {
+		mqttTags(): DeviceTags {
 			const { broker, topic } = store.state?.mqtt || {};
 			if (!broker) return { configured: { value: false } };
 			return {
@@ -626,7 +645,7 @@ export default defineComponent({
 				topic: { value: topic },
 			};
 		},
-		influxTags() {
+		influxTags(): DeviceTags {
 			const { url, database, org } = store.state?.influx || {};
 			if (!url) return { configured: { value: false } };
 			const result = { url: { value: url }, bucket: {}, org: {} };
@@ -634,15 +653,20 @@ export default defineComponent({
 			if (org) result.org = { value: org };
 			return result;
 		},
-		vehicleOptions() {
+		vehicleOptions(): VehicleOption[] {
 			return this.vehicles.map((v) => ({ key: v.name, name: v.config?.title || v.name }));
 		},
-		shmTags() {
-			const { allowControl } = store.state?.shm || {};
-			return { allowControl: { value: allowControl || false } };
+		shmTags(): DeviceTags {
+			const { vendorId, deviceId } = store.state?.shm || {};
+			// TODO: use incoming SEMP connections to determin configured/active status
+			const value = !!vendorId || !!deviceId;
+			return { configured: { value } };
 		},
-		hemsTags() {
-			const { type } = store.state?.hems || {};
+		hems() {
+			return store.state?.hems;
+		},
+		hemsTags(): DeviceTags {
+			const type = this.hems?.config?.type;
 			if (!type) {
 				return { configured: { value: false } };
 			}
@@ -661,28 +685,52 @@ export default defineComponent({
 
 			return result;
 		},
-		isSponsor() {
-			const { name } = store.state?.sponsor || {};
-			return !!name;
-		},
 		sponsor() {
 			return store.state?.sponsor;
+		},
+		isSponsor(): boolean {
+			return !!this.sponsor?.status?.name;
+		},
+		ocpp() {
+			return store.state?.ocpp;
 		},
 		telemetry() {
 			// @ts-expect-error: telemetry property exists but not in TypeScript definitions
 			return store.state?.telemetry === true;
 		},
-		eebusTags() {
+		eebusTags(): DeviceTags {
 			return { configured: { value: store.state?.eebus || false } };
 		},
-		modbusproxyTags() {
+		ocppTags(): DeviceTags {
+			const ocpp = store.state?.ocpp;
+			const stations = ocpp?.status?.stations || [];
+			if (stations.length === 0) {
+				return { configured: { value: false } };
+			}
+
+			const connected = stations.filter((s) => s.status === "connected").length;
+			const configured = stations.filter((s) => s.status === "configured").length;
+			const detected = stations.filter((s) => s.status === "unknown").length;
+			const total = connected + configured;
+
+			const tags: Record<string, any> = {
+				connections: { value: `${connected}/${total}` },
+			};
+
+			if (detected > 0) {
+				tags["detected"] = { value: detected };
+			}
+
+			return tags;
+		},
+		modbusproxyTags(): DeviceTags {
 			const config = store.state?.modbusproxy || [];
 			if (config.length > 0) {
 				return { amount: { value: config.length } };
 			}
 			return { configured: { value: false } };
 		},
-		messagingTags() {
+		messagingTags(): DeviceTags {
 			return { configured: { value: store.state?.messaging || false } };
 		},
 		backupRestoreProps() {
@@ -718,6 +766,9 @@ export default defineComponent({
 		}
 	},
 	methods: {
+		isUnconfigured(tags: DeviceTags): boolean {
+			return tags["configured"]?.value === false;
+		},
 		handleVisibilityChange() {
 			this.isPageVisible = document.visibilityState === "visible";
 			if (this.isPageVisible) {
@@ -778,11 +829,13 @@ export default defineComponent({
 			const response = await api.get("/config/loadpoints");
 			this.loadpoints = response.data || [];
 		},
-		getMetersByNames(names: string[] | null) {
+		getMetersByNames(names: string[] | null): ConfigMeter[] {
 			if (!names || !this.meters) {
 				return [];
 			}
-			return this.meters.filter((m) => names.includes(m.name));
+			return names
+				.map((name) => this.meters.find((m) => m.name === name))
+				.filter((m): m is ConfigMeter => m !== undefined);
 		},
 		getMeterById(id?: number) {
 			if (!id || !this.meters) {
@@ -836,12 +889,12 @@ export default defineComponent({
 			this.loadpointModal().hide();
 			this.$nextTick(() => this.editMeter("charge", meter?.id));
 		},
-		editMeter(type: SelectedMeterType, id?: number) {
+		editMeter(type: MeterType, id?: number) {
 			this.selectedMeterType = type;
 			this.selectedMeterId = id;
 			this.$nextTick(() => this.meterModal().show());
 		},
-		newMeter(type: SelectedMeterType) {
+		newMeter(type: MeterType) {
 			this.selectedMeterId = undefined;
 			this.selectedMeterType = type;
 			this.$nextTick(() => this.meterModal().show());
@@ -849,13 +902,13 @@ export default defineComponent({
 		addSolarBatteryMeter() {
 			this.selectedMeterId = undefined;
 			this.selectedMeterType = undefined;
-			this.selectedMeterTypeChoices = ["pv", "battery"];
+			this.selectedMeterTypeChoices = ["pv", "battery"] as MeterType[];
 			this.$nextTick(() => this.meterModal().show());
 		},
 		newAdditionalMeter() {
 			this.selectedMeterId = undefined;
 			this.selectedMeterType = undefined;
-			this.selectedMeterTypeChoices = ["aux", "ext"];
+			this.selectedMeterTypeChoices = ["aux", "ext"] as MeterType[];
 			this.$nextTick(() => this.meterModal().show());
 		},
 		editCharger(id?: number, loadpointType?: LoadpointType) {
@@ -910,7 +963,7 @@ export default defineComponent({
 		yamlChanged() {
 			this.loadDirty();
 		},
-		meterAdded(type: SelectedMeterType, name: string) {
+		meterAdded(type: MeterType, name: string) {
 			if (type === "charge") {
 				// update loadpoint
 				(
@@ -944,7 +997,7 @@ export default defineComponent({
 			}
 			this.meterChanged();
 		},
-		meterRemoved(type: SelectedMeterType) {
+		meterRemoved(type: MeterType) {
 			if (type === "charge") {
 				// update loadpoint
 				(
@@ -1077,6 +1130,10 @@ export default defineComponent({
 			const charger = this.chargers.find((c) => c.name === chargerName);
 
 			return charger?.config?.icon || this.deviceValues["charger"][chargerName]?.icon?.value;
+		},
+		handleProviderAuthRequest(providerId: string) {
+			const header = this.$refs["header"] as InstanceType<typeof Header> | undefined;
+			header?.requestAuthProvider(providerId);
 		},
 	},
 });
